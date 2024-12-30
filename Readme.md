@@ -1,3 +1,5 @@
-### References
-https://github.com/pytorch/vision/tree/main/examples/cpp/hello_world
-https://learnopencv.com/optical-flow-using-deep-learning-raft/
+
+# RAFT Optical Flow with TorchScript
+
+This project demonstrates how to export, load, and run inference on RAFT (Recurrent All-Pairs Field Transforms) optical flow models using TorchScript and C++.
+
