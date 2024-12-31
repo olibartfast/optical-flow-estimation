@@ -3,6 +3,7 @@
 #include <iostream>
 #include <memory>
 #include <chrono>
+#include <cmath>
 
 //#define SHOW_IMAGE
 
@@ -17,35 +18,100 @@ torch::Tensor preprocessFrame(const cv::Mat& frame, int height, int width) {
     return tensor.clone(); // Clone to ensure memory ownership
 }
 
-// Helper function to visualize optical flow
+// Helper function to create a color wheel based on 
+// https://github.com/tomrunia/OpticalFlow_Visualization
+cv::Mat makeColorwheel() {
+    const int RY = 15, YG = 6, GC = 4, CB = 11, BM = 13, MR = 6;
+    const int ncols = RY + YG + GC + CB + BM + MR;
+    cv::Mat colorwheel(ncols, 1, CV_8UC3);
+
+    int col = 0;
+    // RY
+    for (int i = 0; i < RY; ++i, ++col) {
+        colorwheel.at<cv::Vec3b>(col) = cv::Vec3b(255, 255 * i / RY, 0);
+    }
+    // YG
+    for (int i = 0; i < YG; ++i, ++col) {
+        colorwheel.at<cv::Vec3b>(col) = cv::Vec3b(255 - 255 * i / YG, 255, 0);
+    }
+    // GC
+    for (int i = 0; i < GC; ++i, ++col) {
+        colorwheel.at<cv::Vec3b>(col) = cv::Vec3b(0, 255, 255 * i / GC);
+    }
+    // CB
+    for (int i = 0; i < CB; ++i, ++col) {
+        colorwheel.at<cv::Vec3b>(col) = cv::Vec3b(0, 255 - 255 * i / CB, 255);
+    }
+    // BM
+    for (int i = 0; i < BM; ++i, ++col) {
+        colorwheel.at<cv::Vec3b>(col) = cv::Vec3b(255 * i / BM, 0, 255);
+    }
+    // MR
+    for (int i = 0; i < MR; ++i, ++col) {
+        colorwheel.at<cv::Vec3b>(col) = cv::Vec3b(255, 0, 255 - 255 * i / MR);
+    }
+    return colorwheel;
+}
+
+// Helper function to visualize optical flow based on 
+// https://github.com/tomrunia/OpticalFlow_Visualization
 cv::Mat visualizeFlow(const at::Tensor& flow) {
-    auto flow_cpu = flow.squeeze().permute({1, 2, 0}).detach().cpu();
+    auto flow_cpu = flow.squeeze().permute({1, 2, 0}).contiguous().detach().cpu();
     cv::Mat flow_mat(flow_cpu.size(0), flow_cpu.size(1), CV_32FC2);
     std::memcpy(flow_mat.data, flow_cpu.data_ptr<float>(), 
                 flow_cpu.numel() * sizeof(float));
 
-    cv::Mat magnitude, angle, hsv;
-    cv::cartToPolar(cv::Mat(flow_mat.size(), CV_32F, flow_mat.ptr<float>(0)),
-                    cv::Mat(flow_mat.size(), CV_32F, flow_mat.ptr<float>(1)),
-                    magnitude, angle);
+    cv::Mat flow_parts[2];
+    cv::split(flow_mat, flow_parts);
+    cv::Mat u = flow_parts[0], v = flow_parts[1];
 
-    cv::normalize(magnitude, magnitude, 0, 1, cv::NORM_MINMAX);
+    cv::Mat magnitude, angle;
+    cv::cartToPolar(u, v, magnitude, angle);
 
-    // Create HSV image
-    hsv = cv::Mat(flow_mat.size(), CV_8UC3);
-    for(int i = 0; i < flow_mat.rows; i++) {
-        for(int j = 0; j < flow_mat.cols; j++) {
-            hsv.at<cv::Vec3b>(i,j) = cv::Vec3b(
-                cv::saturate_cast<uchar>(angle.at<float>(i,j) * 180 / CV_PI / 2),
-                255,
-                cv::saturate_cast<uchar>(magnitude.at<float>(i,j) * 255)
-            );
+    // Normalize magnitude
+    double mag_max;
+    cv::minMaxLoc(magnitude, 0, &mag_max);
+    if (mag_max > 0) {
+        magnitude /= mag_max;
+    }
+
+    // Convert angle to [0, 1] range
+    angle *= (1.0 / (2 * CV_PI));
+    angle += 0.5;
+
+    // Apply color wheel
+    cv::Mat colorwheel = makeColorwheel();
+    const int ncols = colorwheel.rows;
+    cv::Mat flow_color(flow_mat.size(), CV_8UC3);
+
+    for (int i = 0; i < flow_mat.rows; ++i) {
+        for (int j = 0; j < flow_mat.cols; ++j) {
+            float mag = magnitude.at<float>(i, j);
+            float ang = angle.at<float>(i, j);
+
+            int k0 = static_cast<int>(ang * (ncols - 1));
+            int k1 = (k0 + 1) % ncols;
+            float f = (ang * (ncols - 1)) - k0;
+
+            cv::Vec3b col0 = colorwheel.at<cv::Vec3b>(k0);
+            cv::Vec3b col1 = colorwheel.at<cv::Vec3b>(k1);
+
+            cv::Vec3b color;
+            for (int ch = 0; ch < 3; ++ch) {
+                float col = (1 - f) * col0[ch] + f * col1[ch];
+                if (mag <= 1) {
+                    col = 255 - mag * (255 - col);
+                } else {
+                    col *= 0.75;
+                }
+                color[ch] = static_cast<uchar>(col);
+            }
+
+            flow_color.at<cv::Vec3b>(i, j) = color;
         }
     }
 
-    cv::Mat rgb;
-    cv::cvtColor(hsv, rgb, cv::COLOR_HSV2RGB);
-    return rgb;
+    return flow_color;
 }
 
 int main(int argc, char** argv) {

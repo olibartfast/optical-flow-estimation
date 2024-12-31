@@ -179,17 +179,17 @@ plot(grid)
 # this example is being rendered on a machine without a GPU, and it would take
 # too long to run it.
 
-# from torchvision.io import write_jpeg
-# for i, (img1, img2) in enumerate(zip(frames, frames[1:])):
-#     # Note: it would be faster to predict batches of flows instead of individual flows
-#     img1 = preprocess(img1[None]).to(device)
-#     img2 = preprocess(img2[None]).to(device)
+from torchvision.io import write_jpeg
+for i, (img1, img2) in enumerate(zip(frames, frames[1:])):
+    # Note: it would be faster to predict batches of flows instead of individual flows
+    img1 = preprocess(img1[None]).to(device)
+    img2 = preprocess(img2[None]).to(device)
 
-#     list_of_flows = model(img1_batch, img2_batch)
-#     predicted_flow = list_of_flows[-1][0]
-#     flow_img = flow_to_image(predicted_flow).to("cpu")
-#     output_folder = "/tmp/"  # Update this to the folder of your choice
-#     write_jpeg(flow_img, output_folder + f"predicted_flow_{i}.jpg")
+    list_of_flows = model(img1_batch, img2_batch)
+    predicted_flow = list_of_flows[-1][0]
+    flow_img = flow_to_image(predicted_flow).to("cpu")
+    output_folder = "/tmp/"  # Update this to the folder of your choice
+    write_jpeg(flow_img, output_folder + f"predicted_flow_{i}.jpg")
 
 ####################################
 # Once the .jpg flow images are saved, you can convert them into a video or a
