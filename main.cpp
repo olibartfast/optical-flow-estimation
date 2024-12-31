@@ -7,6 +7,9 @@
 
 //#define SHOW_IMAGE
 
+// Constants for color wheel
+const int RY = 15, YG = 6, GC = 4, CB = 11, BM = 13, MR = 6;
+
 // Helper function to preprocess an OpenCV frame for the model
 torch::Tensor preprocessFrame(const cv::Mat& frame, int height, int width) {
     cv::Mat resized, float_img;
@@ -21,7 +24,6 @@ torch::Tensor preprocessFrame(const cv::Mat& frame, int height, int width) {
 // Helper function to create a color wheel based on 
 // https://github.com/tomrunia/OpticalFlow_Visualization
 cv::Mat makeColorwheel() {
-    const int RY = 15, YG = 6, GC = 4, CB = 11, BM = 13, MR = 6;
     const int ncols = RY + YG + GC + CB + BM + MR;
     cv::Mat colorwheel(ncols, 1, CV_8UC3);
 
@@ -139,6 +141,7 @@ int main(int argc, char** argv) {
         model.eval();
     } catch (const c10::Error& e) {
         std::cerr << "Error loading TorchScript model: " << e.what() << "\n";
+        cap.release();
         return -1;
     }
 
@@ -162,66 +165,70 @@ int main(int argc, char** argv) {
     auto start_time = std::chrono::high_resolution_clock::now();
     int frame_count = 0;
 
-    while (cap.read(frame)) {
-        frame_count++;
+    try {
+        while (cap.read(frame)) {
+            frame_count++;
 
-        // Convert current frame to RGB
-        cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB);
+            // Convert current frame to RGB
+            cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB);
 
-        // Handle the first frame
-        if (prev_frame.empty()) {
-            prev_frame = frame.clone();
-            continue;
-        }
-
-        // Preprocess frames for the model
-        auto input1 = preprocessFrame(prev_frame, model_input_height, model_input_width).to(device);
-        auto input2 = preprocessFrame(frame, model_input_height, model_input_width).to(device);
-
-        torch::Tensor output;
-        try {
-            // TorchScript inference
-            torch::NoGradGuard no_grad;
-            std::vector<torch::jit::IValue> inputs = {input1, input2};
-            auto result = model.forward(inputs);
-            
-            if (result.isTensor()) {
-                output = result.toTensor();
-            } else if (result.isList()) {
-                auto list = result.toListRef();  // Changed from result.toList().elements()
-                output = list.back().toTensor();
-            } else {
-                throw std::runtime_error("Unsupported output type from the model");
+            // Handle the first frame
+            if (prev_frame.empty()) {
+                prev_frame = frame.clone();
+                continue;
             }
 
-            // Visualize the output
-            output_frame = visualizeFlow(output);
-            
-            // Resize output_frame to match original frame size
-            cv::resize(output_frame, output_frame, cv::Size(frame_width, frame_height));
-            
-            // Create side-by-side display
-            display_frame = cv::Mat(frame_height, frame_width * 2, CV_8UC3);
-            frame.copyTo(display_frame(cv::Rect(0, 0, frame_width, frame_height)));
-            output_frame.copyTo(display_frame(cv::Rect(frame_width, 0, frame_width, frame_height)));
-            // reconvert back display_frame to BGR for imshow
-            cv::cvtColor(display_frame, display_frame, cv::COLOR_RGB2BGR);
+            // Preprocess frames for the model
+            auto input1 = preprocessFrame(prev_frame, model_input_height, model_input_width).to(device);
+            auto input2 = preprocessFrame(frame, model_input_height, model_input_width).to(device);
+
+            torch::Tensor output;
+            try {
+                // TorchScript inference
+                torch::NoGradGuard no_grad;
+                std::vector<torch::jit::IValue> inputs = {input1, input2};
+                auto result = model.forward(inputs);
+                
+                if (result.isTensor()) {
+                    output = result.toTensor();
+                } else if (result.isList()) {
+                    auto list = result.toListRef();  // Changed from result.toList().elements()
+                    output = list.back().toTensor();
+                } else {
+                    throw std::runtime_error("Unsupported output type from the model");
+                }
+
+                // Visualize the output
+                output_frame = visualizeFlow(output);
+                
+                // Resize output_frame to match original frame size
+                cv::resize(output_frame, output_frame, cv::Size(frame_width, frame_height));
+                
+                // Create side-by-side display
+                display_frame = cv::Mat(frame_height, frame_width * 2, CV_8UC3);
+                frame.copyTo(display_frame(cv::Rect(0, 0, frame_width, frame_height)));
+                output_frame.copyTo(display_frame(cv::Rect(frame_width, 0, frame_width, frame_height)));
+                // reconvert back display_frame to BGR for imshow
+                cv::cvtColor(display_frame, display_frame, cv::COLOR_RGB2BGR);
 #ifdef SHOW_IMAGE
-            cv::imshow("Original vs Optical Flow", display_frame);
-            // Break on 'q' key press
-            if (cv::waitKey(delay) == 'q') break;        
+                cv::imshow("Original vs Optical Flow", display_frame);
+                // Break on 'q' key press
+                if (cv::waitKey(delay) == 'q') break;        
 #endif                
-            video_out.write(display_frame);
+                video_out.write(display_frame);
 
-            // Update previous frame
-            prev_frame = frame.clone();
+                // Update previous frame
+                prev_frame = frame.clone();
 
 
 
-        } catch (const std::exception& e) {
-            std::cerr << "Error during inference: " << e.what() << std::endl;
-            break;
+            } catch (const std::exception& e) {
+                std::cerr << "Error during inference: " << e.what() << std::endl;
+                break;
+            }
         }
+    } catch (const std::exception& e) {
+        std::cerr << "An error occurred during video processing: " << e.what() << std::endl;
     }
 
     auto end_time = std::chrono::high_resolution_clock::now();
