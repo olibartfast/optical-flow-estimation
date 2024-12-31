@@ -4,6 +4,8 @@
 #include <memory>
 #include <chrono>
 
+//#define SHOW_IMAGE
+
 // Helper function to preprocess an OpenCV frame for the model
 torch::Tensor preprocessFrame(const cv::Mat& frame, int height, int width) {
     cv::Mat resized, float_img;
@@ -80,15 +82,16 @@ int main(int argc, char** argv) {
     double fps = cap.get(cv::CAP_PROP_FPS);
     int delay = 1000 / fps;
 
-    // Set up video writer
+    // Set up video writer for side-by-side output
     cv::VideoWriter video_out("output.avi", 
                               cv::VideoWriter::fourcc('M','J','P','G'), 
                               fps, 
-                              cv::Size(frame_width, frame_height));
-
+                              cv::Size(frame_width * 2, frame_height));  // Double the width for side-by-side
     // Process video
-    cv::Mat frame, prev_frame, output_frame;
-    int model_input_width = 256, model_input_height = 256; // Resize for model input
+    cv::Mat frame, prev_frame, output_frame, display_frame;
+
+    // Set model input dimensions
+    int model_input_width = 960, model_input_height = 520; // Updated to match Python example
     
     auto start_time = std::chrono::high_resolution_clock::now();
     int frame_count = 0;
@@ -131,14 +134,23 @@ int main(int argc, char** argv) {
             // Resize output_frame to match original frame size
             cv::resize(output_frame, output_frame, cv::Size(frame_width, frame_height));
             
-            cv::imshow("Optical Flow", output_frame);
-            video_out.write(output_frame);
+            // Create side-by-side display
+            display_frame = cv::Mat(frame_height, frame_width * 2, CV_8UC3);
+            frame.copyTo(display_frame(cv::Rect(0, 0, frame_width, frame_height)));
+            output_frame.copyTo(display_frame(cv::Rect(frame_width, 0, frame_width, frame_height)));
+            // reconvert back display_frame to BGR for imshow
+            cv::cvtColor(display_frame, display_frame, cv::COLOR_RGB2BGR);
+#ifdef SHOW_IMAGE
+            cv::imshow("Original vs Optical Flow", display_frame);
+            // Break on 'q' key press
+            if (cv::waitKey(delay) == 'q') break;        
+#endif                
+            video_out.write(display_frame);
 
             // Update previous frame
             prev_frame = frame.clone();
 
-            // Break on 'q' key press
-            if (cv::waitKey(delay) == 'q') break;
+
 
         } catch (const std::exception& e) {
             std::cerr << "Error during inference: " << e.what() << std::endl;
