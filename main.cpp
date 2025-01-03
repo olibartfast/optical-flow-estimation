@@ -132,7 +132,6 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-
     // Load model
     torch::jit::script::Module model;
     try {
@@ -151,76 +150,77 @@ int main(int argc, char** argv) {
     double fps = cap.get(cv::CAP_PROP_FPS);
     int delay = 1000 / fps;
 
-    // Set up video writer for side-by-side output
     cv::VideoWriter video_out("output.avi", 
-                              cv::VideoWriter::fourcc('M','J','P','G'), 
-                              fps, 
-                              cv::Size(frame_width * 2, frame_height));  // Double the width for side-by-side
-    // Process video
-    cv::Mat frame, prev_frame, output_frame, display_frame;
+                             cv::VideoWriter::fourcc('M','J','P','G'), 
+                             fps, 
+                             cv::Size(frame_width * 2, frame_height));
 
-    // Set model input dimensions
-    int model_input_width = 960, model_input_height = 520; // Updated to match Python example
+    cv::Mat frame, prev_frame, output_frame, display_frame;
+    int model_input_width = 960, model_input_height = 520;
     
-    auto start_time = std::chrono::high_resolution_clock::now();
+    auto total_start_time = std::chrono::high_resolution_clock::now();
     int frame_count = 0;
+    double total_inference_time = 0.0;
 
     try {
         while (cap.read(frame)) {
             frame_count++;
-
-            // Convert current frame to RGB
             cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB);
 
-            // Handle the first frame
             if (prev_frame.empty()) {
                 prev_frame = frame.clone();
                 continue;
             }
 
-            // Preprocess frames for the model
+            // Preprocess frames
             auto input1 = preprocessFrame(prev_frame, model_input_height, model_input_width).to(device);
             auto input2 = preprocessFrame(frame, model_input_height, model_input_width).to(device);
 
             torch::Tensor output;
             try {
-                // TorchScript inference
+                // Start inference timing
+                auto inference_start = std::chrono::high_resolution_clock::now();
+                
+                // Model inference
                 torch::NoGradGuard no_grad;
                 std::vector<torch::jit::IValue> inputs = {input1, input2};
                 auto result = model.forward(inputs);
                 
+                // End inference timing
+                auto inference_end = std::chrono::high_resolution_clock::now();
+                auto inference_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    inference_end - inference_start);
+                
+                // Log inference time
+                double inference_time = inference_duration.count() / 1000.0;
+                total_inference_time += inference_time;
+                std::cout << "Frame " << frame_count << " inference time: " 
+                         << inference_time << " seconds" << std::endl;
+                
                 if (result.isTensor()) {
                     output = result.toTensor();
                 } else if (result.isList()) {
-                    auto list = result.toListRef();  // Changed from result.toList().elements()
+                    auto list = result.toListRef();
                     output = list.back().toTensor();
                 } else {
                     throw std::runtime_error("Unsupported output type from the model");
                 }
 
-                // Visualize the output
+                // Visualize and display
                 output_frame = visualizeFlow(output);
-                
-                // Resize output_frame to match original frame size
                 cv::resize(output_frame, output_frame, cv::Size(frame_width, frame_height));
                 
-                // Create side-by-side display
                 display_frame = cv::Mat(frame_height, frame_width * 2, CV_8UC3);
                 frame.copyTo(display_frame(cv::Rect(0, 0, frame_width, frame_height)));
                 output_frame.copyTo(display_frame(cv::Rect(frame_width, 0, frame_width, frame_height)));
-                // reconvert back display_frame to BGR for imshow
                 cv::cvtColor(display_frame, display_frame, cv::COLOR_RGB2BGR);
+
 #ifdef SHOW_IMAGE
                 cv::imshow("Original vs Optical Flow", display_frame);
-                // Break on 'q' key press
                 if (cv::waitKey(delay) == 'q') break;        
 #endif                
                 video_out.write(display_frame);
-
-                // Update previous frame
                 prev_frame = frame.clone();
-
-
 
             } catch (const std::exception& e) {
                 std::cerr << "Error during inference: " << e.what() << std::endl;
@@ -231,11 +231,17 @@ int main(int argc, char** argv) {
         std::cerr << "An error occurred during video processing: " << e.what() << std::endl;
     }
 
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    auto total_end_time = std::chrono::high_resolution_clock::now();
+    auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+        total_end_time - total_start_time);
     
-    std::cout << "Processed " << frame_count << " frames in " << duration.count() / 1000.0 << " seconds" << std::endl;
-    std::cout << "Average FPS: " << frame_count / (duration.count() / 1000.0) << std::endl;
+    // Print summary statistics
+    std::cout << "\nProcessing Summary:" << std::endl;
+    std::cout << "Total frames processed: " << frame_count << std::endl;
+    std::cout << "Total processing time: " << total_duration.count() / 1000.0 << " seconds" << std::endl;
+    std::cout << "Average FPS: " << frame_count / (total_duration.count() / 1000.0) << std::endl;
+    std::cout << "Total inference time: " << total_inference_time << " seconds" << std::endl;
+    std::cout << "Average inference time per frame: " << total_inference_time / frame_count << " seconds" << std::endl;
 
     cap.release();
     video_out.release();
