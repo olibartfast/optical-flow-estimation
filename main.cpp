@@ -280,20 +280,20 @@ int main(int argc, char** argv) {
                 }
                 #endif
 
-                // Visualize and display
-                // output_frame = visualizeFlow(output);
-                // cv::resize(output_frame, output_frame, cv::Size(frame_width, frame_height));
+                //Visualize and display
+                output_frame = visualizeFlow(output);
+                cv::resize(output_frame, output_frame, cv::Size(frame_width, frame_height));
                 
-                // display_frame = cv::Mat(frame_height, frame_width * 2, CV_8UC3);
-                // frame.copyTo(display_frame(cv::Rect(0, 0, frame_width, frame_height)));
-                // output_frame.copyTo(display_frame(cv::Rect(frame_width, 0, frame_width, frame_height)));
-                // cv::cvtColor(display_frame, display_frame, cv::COLOR_RGB2BGR);
+                display_frame = cv::Mat(frame_height, frame_width * 2, CV_8UC3);
+                frame.copyTo(display_frame(cv::Rect(0, 0, frame_width, frame_height)));
+                output_frame.copyTo(display_frame(cv::Rect(frame_width, 0, frame_width, frame_height)));
+                cv::cvtColor(display_frame, display_frame, cv::COLOR_RGB2BGR);
 
 #ifdef SHOW_IMAGE
                 cv::imshow("Original vs Optical Flow", display_frame);
                 if (cv::waitKey(delay) == 'q') break;        
 #endif                
-                //video_out.write(display_frame);
+                video_out.write(display_frame);
                 prev_frame = frame.clone();
 
             } catch (const std::exception& e) {
