@@ -1,14 +1,24 @@
 import torch
-from torchvision.models.optical_flow import raft_small  # or raft_large
-from torchvision.transforms import functional as F
-from torchsummary import summary
+from torchvision.models.optical_flow import raft_small
+import torch.nn as nn
+
 
 # Load the pretrained RAFT model
-model = raft_small(pretrained=True).eval()
+model = raft_small(pretrained=True)
 
-# Sample input tensors with batch size 1 and image size 256x256 (modify as needed)
-example_input1 = torch.randn(1, 3, 256, 256)
-example_input2 = torch.randn(1, 3, 256, 256)
+# Move the model to the correct device
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = model.to(device)
+model.eval()
+
+# Batch size and image size
+batch_size = 1
+height = 520
+width = 960
+
+# Sample input tensors
+example_input1 = torch.randn(batch_size, 3, height, width).to(device)
+example_input2 = torch.randn(batch_size, 3, height, width).to(device)
 
 # Method 1: Export to TorchScript using tracing
 print("Exporting to TorchScript (Tracing)...")
@@ -27,19 +37,22 @@ except Exception as e:
 
 # Method 3: Export to ONNX
 print("Exporting to ONNX...")
-torch.onnx.export(
-    model,
-    (example_input1, example_input2),
-    "raft_small.onnx",
-    export_params=True,
-    opset_version=16,  # Choose ONNX opset version based on compatibility
-    do_constant_folding=True,
-    input_names=['input1', 'input2'],
-    output_names=['output'],
-    dynamic_axes={
-        'input1': {0: 'batch_size', 2: 'height', 3: 'width'},
-        'input2': {0: 'batch_size', 2: 'height', 3: 'width'},
-        'output': {0: 'batch_size', 2: 'height', 3: 'width'}
-    }
-)
-print("ONNX model saved as 'raft_small.onnx'")
+try:
+    torch.onnx.export(
+        model,
+        (example_input1, example_input2),
+        "raft_small.onnx",
+        export_params=True,
+        opset_version=16,  # Choose ONNX opset version based on compatibility
+        do_constant_folding=True,
+        input_names=['input1', 'input2'],
+        output_names=['output'],
+        dynamic_axes={
+            'input1': {0: 'batch_size', 2: 'height', 3: 'width'},
+            'input2': {0: 'batch_size', 2: 'height', 3: 'width'},
+            'output': {0: 'batch_size', 2: 'height', 3: 'width'}
+        }
+    )
+    print("ONNX model saved as 'raft_small.onnx'")
+except Exception as e:
+    print(f"ONNX export failed: {e}")
