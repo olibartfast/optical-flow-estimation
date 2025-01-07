@@ -6,3 +6,5 @@ This project demonstrates how to export, load, and run inference on RAFT (Recurr
 * Libtorch version: [2.5.1](https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.5.1%2Bcu124.zip)
 
 * https://pytorch.org/vision/main/models/raft.html
+
+* https://paperswithcode.com/task/optical-flow-estimation
