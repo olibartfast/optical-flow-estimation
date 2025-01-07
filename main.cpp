@@ -5,15 +5,16 @@
 #include <memory>
 #include <chrono>
 #include <cmath>
-#include <exception> // Needed for exception handling
+#include <exception>
 #include <sstream>
+
 //#define SHOW_IMAGE
 
 // Constants for color wheel
 const int RY = 15, YG = 6, GC = 4, CB = 11, BM = 13, MR = 6;
 
 // Helper function to preprocess an OpenCV frame for the model
-torch::Tensor preprocessFrame(const cv::Mat& frame, int height, int width, 
+torch::Tensor preprocessFrame(const cv::Mat& frame, int height, int width,
                             const torch::Device& device, bool convert_to_rgb = true) {
     // Input validation
     if (frame.empty()) {
@@ -35,13 +36,13 @@ torch::Tensor preprocessFrame(const cv::Mat& frame, int height, int width,
     resized.convertTo(float_img, CV_32F, 1.0 / 255);
     float_img = (float_img - 0.5) / 0.5;
 
-    torch::Tensor tensor = torch::from_blob(float_img.data, 
-                                          {1, height, width, 3}, 
+    torch::Tensor tensor = torch::from_blob(float_img.data,
+                                          {1, height, width, 3},
                                           torch::kFloat)
                               .to(device)
                               .permute({0, 3, 1, 2})
                               .clone();
-    
+
     return tensor;
 }
 
@@ -84,7 +85,7 @@ cv::Mat makeColorwheel() {
 cv::Mat visualizeFlow(const at::Tensor& flow) {
     auto flow_cpu = flow.squeeze().permute({1, 2, 0}).contiguous().detach().cpu();
     cv::Mat flow_mat(flow_cpu.size(0), flow_cpu.size(1), CV_32FC2);
-    std::memcpy(flow_mat.data, flow_cpu.data_ptr<float>(), 
+    std::memcpy(flow_mat.data, flow_cpu.data_ptr<float>(),
                 flow_cpu.numel() * sizeof(float));
 
     cv::Mat flow_parts[2];
@@ -154,12 +155,36 @@ void printExceptionChain(const std::exception& e, int level = 0) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::cerr << "Usage: " << argv[0] << " <video_path> <model_path>\n";
+        std::cerr << "Usage: " << argv[0] << " <mode> <model_path> [video_path | image1_path image2_path]\n";
+        std::cerr << "Modes:\n";
+        std::cerr << "  video: Process a video. Requires video_path.\n";
+        std::cerr << "  image: Process two images. Requires image1_path and image2_path.\n";
         return -1;
     }
 
-    std::string video_path = argv[1];
+    std::string mode = argv[1];
     std::string model_path = argv[2];
+    std::string video_path, image1_path, image2_path;
+
+    if (mode == "video") {
+        if (argc != 4) {
+            std::cerr << "Error: video mode requires a video path.\n";
+            std::cerr << "Usage: " << argv[0] << " video <model_path> <video_path>\n";
+            return -1;
+        }
+        video_path = argv[3];
+    } else if (mode == "image") {
+        if (argc != 5) {
+            std::cerr << "Error: image mode requires two image paths.\n";
+            std::cerr << "Usage: " << argv[0] << " image <model_path> <image1_path> <image2_path>\n";
+            return -1;
+        }
+        image1_path = argv[3];
+        image2_path = argv[4];
+    } else {
+        std::cerr << "Error: Invalid mode. Choose 'video' or 'image'.\n";
+        return -1;
+    }
 
     // Device selection with compile-time check for CUDA
     torch::Device device(torch::kCPU);
@@ -177,12 +202,6 @@ int main(int argc, char** argv) {
     std::cout << "PyTorch was built without CUDA support. Using CPU." << std::endl;
 #endif
 
-    cv::VideoCapture cap(video_path);
-    if (!cap.isOpened()) {
-        std::cerr << "Error opening video file: " << video_path << "\n";
-        return -1;
-    }
-
     // Load model
     torch::jit::script::Module model;
     try {
@@ -191,32 +210,16 @@ int main(int argc, char** argv) {
         model.eval();
     } catch (const c10::Error& e) {
         std::cerr << "Error loading TorchScript model: " << e.what() << "\n";
-        cap.release();
         return -1;
     }
-
-    // Get video properties
-    int frame_width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
-    int frame_height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
-    double fps = cap.get(cv::CAP_PROP_FPS);
-    int delay = 1000 / fps;
-
-    // Declare video writer
-    cv::VideoWriter video_out("output.avi", 
-                             cv::VideoWriter::fourcc('M','J','P','G'), 
-                             fps, 
-                             cv::Size(frame_width * 2, frame_height));
-
-    // Declare all required Mat objects
-    cv::Mat frame, prev_frame, output_frame, display_frame;
 
     // Set model input dimensions
     const int model_input_width = 960;
     const int model_input_height = 520;
-    
+
     auto total_start_time = std::chrono::high_resolution_clock::now();
-    int frame_count = 0;
     double total_inference_time = 0.0;
+    int frame_count = 0;
 
     #ifdef TORCH_CUDA_AVAILABLE
     if (has_cuda) {
@@ -225,85 +228,190 @@ int main(int argc, char** argv) {
     #endif
 
     try {
-        while (cap.read(frame)) {
-            frame_count++;
-            cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB);
-
-            if (prev_frame.empty()) {
-                prev_frame = frame.clone();
-                continue;
+        if (mode == "video") {
+            // Video processing
+            cv::VideoCapture cap(video_path);
+            if (!cap.isOpened()) {
+                std::cerr << "Error opening video file: " << video_path << "\n";
+                return -1;
             }
 
-            try {
-                // Convert frames to tensors and move to appropriate device
-                auto input1 = preprocessFrame(prev_frame, model_input_height, model_input_width, device);
-                auto input2 = preprocessFrame(frame, model_input_height, model_input_width, device);
+            // Get video properties
+            int frame_width = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+            int frame_height = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+            double fps = cap.get(cv::CAP_PROP_FPS);
+            int delay = 1000 / fps;
 
-                auto inference_start = std::chrono::high_resolution_clock::now();
-                
-                // Model inference
-                torch::NoGradGuard no_grad;
-                std::vector<torch::jit::IValue> inputs;
-                inputs.push_back(input1);
-                inputs.push_back(input2);
-                
-                auto result = model.forward(inputs);
-                
-                #ifdef TORCH_CUDA_AVAILABLE
-                if (has_cuda) {
-                    torch::cuda::synchronize();
-                }
-                #endif
-                
-                auto inference_end = std::chrono::high_resolution_clock::now();
-                auto inference_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    inference_end - inference_start);
-                
-                double inference_time = inference_duration.count() / 1000.0;
-                total_inference_time += inference_time;
-                std::cout << "Frame " << frame_count << " inference time: " 
-                         << inference_time << " seconds" << std::endl;
-                
-                torch::Tensor output;
-                if (result.isTensor()) {
-                    output = result.toTensor();
-                } else if (result.isList()) {
-                    auto list = result.toListRef();
-                    output = list.back().toTensor();
-                } else {
-                    throw std::runtime_error("Unsupported output type from the model");
+            // Declare video writer
+            cv::VideoWriter video_out("output.avi",
+                                     cv::VideoWriter::fourcc('M','J','P','G'),
+                                     fps,
+                                     cv::Size(frame_width * 2, frame_height));
+
+            // Declare all required Mat objects
+            cv::Mat frame, prev_frame, output_frame, display_frame;
+
+            while (cap.read(frame)) {
+                frame_count++;
+                cv::cvtColor(frame, frame, cv::COLOR_BGR2RGB);
+
+                if (prev_frame.empty()) {
+                    prev_frame = frame.clone();
+                    continue;
                 }
 
-                #ifdef TORCH_CUDA_AVAILABLE
-                if (has_cuda) {
-                    output = output.cpu();
-                }
-                #endif
+                try {
+                    // Convert frames to tensors and move to appropriate device
+                    auto input1 = preprocessFrame(prev_frame, model_input_height, model_input_width, device);
+                    auto input2 = preprocessFrame(frame, model_input_height, model_input_width, device);
 
-                //Visualize and display
-                output_frame = visualizeFlow(output);
-                cv::resize(output_frame, output_frame, cv::Size(frame_width, frame_height));
-                
-                display_frame = cv::Mat(frame_height, frame_width * 2, CV_8UC3);
-                frame.copyTo(display_frame(cv::Rect(0, 0, frame_width, frame_height)));
-                output_frame.copyTo(display_frame(cv::Rect(frame_width, 0, frame_width, frame_height)));
-                cv::cvtColor(display_frame, display_frame, cv::COLOR_RGB2BGR);
+                    auto inference_start = std::chrono::high_resolution_clock::now();
+
+                    // Model inference
+                    torch::NoGradGuard no_grad;
+                    std::vector<torch::jit::IValue> inputs;
+                    inputs.push_back(input1);
+                    inputs.push_back(input2);
+
+                    auto result = model.forward(inputs);
+
+                    #ifdef TORCH_CUDA_AVAILABLE
+                    if (has_cuda) {
+                        torch::cuda::synchronize();
+                    }
+                    #endif
+
+                    auto inference_end = std::chrono::high_resolution_clock::now();
+                    auto inference_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        inference_end - inference_start);
+
+                    double inference_time = inference_duration.count() / 1000.0;
+                    total_inference_time += inference_time;
+                    std::cout << "Frame " << frame_count << " inference time: "
+                              << inference_time << " seconds" << std::endl;
+
+                    torch::Tensor output;
+                    if (result.isTensor()) {
+                        output = result.toTensor();
+                    } else if (result.isList()) {
+                        auto list = result.toListRef();
+                        output = list.back().toTensor();
+                    } else {
+                        throw std::runtime_error("Unsupported output type from the model");
+                    }
+
+                    #ifdef TORCH_CUDA_AVAILABLE
+                    if (has_cuda) {
+                        output = output.cpu();
+                    }
+                    #endif
+
+                    //Visualize and display
+                    output_frame = visualizeFlow(output);
+                    cv::resize(output_frame, output_frame, cv::Size(frame_width, frame_height));
+
+                    display_frame = cv::Mat(frame_height, frame_width * 2, CV_8UC3);
+                    frame.copyTo(display_frame(cv::Rect(0, 0, frame_width, frame_height)));
+                    output_frame.copyTo(display_frame(cv::Rect(frame_width, 0, frame_width, frame_height)));
+                    cv::cvtColor(display_frame, display_frame, cv::COLOR_RGB2BGR);
 
 #ifdef SHOW_IMAGE
-                cv::imshow("Original vs Optical Flow", display_frame);
-                if (cv::waitKey(delay) == 'q') break;        
-#endif                
-                video_out.write(display_frame);
-                prev_frame = frame.clone();
+                    cv::imshow("Original vs Optical Flow", display_frame);
+                    if (cv::waitKey(delay) == 'q') break;
+#endif
+                    video_out.write(display_frame);
+                    prev_frame = frame.clone();
 
-            } catch (const std::exception& e) {
-                 std::cerr << "Error during frame processing:\n";
-                printExceptionChain(e);
-                break;
+                } catch (const std::exception& e) {
+                    std::cerr << "Error during frame processing:\n";
+                    printExceptionChain(e);
+                    break;
+                }
             }
+            cap.release();
+            video_out.release();
+
+        } else if (mode == "image") {
+            // Image processing
+            cv::Mat image1 = cv::imread(image1_path);
+            cv::Mat image2 = cv::imread(image2_path);
+
+            if (image1.empty() || image2.empty()) {
+                std::cerr << "Error loading images.\n";
+                return -1;
+            }
+            
+            frame_count = 1; // Set frame count to 1 for image mode
+
+            // Get image properties
+            int frame_width = image1.cols;
+            int frame_height = image1.rows;
+
+            // Declare all required Mat objects
+            cv::Mat output_frame, display_frame;
+
+            // Convert frames to tensors and move to appropriate device
+            auto input1 = preprocessFrame(image1, model_input_height, model_input_width, device);
+            auto input2 = preprocessFrame(image2, model_input_height, model_input_width, device);
+
+            auto inference_start = std::chrono::high_resolution_clock::now();
+
+            // Model inference
+            torch::NoGradGuard no_grad;
+            std::vector<torch::jit::IValue> inputs;
+            inputs.push_back(input1);
+            inputs.push_back(input2);
+
+            auto result = model.forward(inputs);
+
+            #ifdef TORCH_CUDA_AVAILABLE
+            if (has_cuda) {
+                torch::cuda::synchronize();
+            }
+            #endif
+
+            auto inference_end = std::chrono::high_resolution_clock::now();
+            auto inference_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                inference_end - inference_start);
+
+            double inference_time = inference_duration.count() / 1000.0;
+            total_inference_time += inference_time;
+            std::cout << "Inference time: " << inference_time << " seconds" << std::endl;
+
+            torch::Tensor output;
+            if (result.isTensor()) {
+                output = result.toTensor();
+            } else if (result.isList()) {
+                auto list = result.toListRef();
+                output = list.back().toTensor();
+            } else {
+                throw std::runtime_error("Unsupported output type from the model");
+            }
+
+            #ifdef TORCH_CUDA_AVAILABLE
+            if (has_cuda) {
+                output = output.cpu();
+            }
+            #endif
+
+            //Visualize and display
+            output_frame = visualizeFlow(output);
+            cv::resize(output_frame, output_frame, cv::Size(frame_width, frame_height));
+
+            display_frame = cv::Mat(frame_height, frame_width * 2, CV_8UC3);
+            cv::cvtColor(image1, image1, cv::COLOR_BGR2RGB);
+            image1.copyTo(display_frame(cv::Rect(0, 0, frame_width, frame_height)));
+            output_frame.copyTo(display_frame(cv::Rect(frame_width, 0, frame_width, frame_height)));
+            cv::cvtColor(display_frame, display_frame, cv::COLOR_RGB2BGR);
+
+#ifdef SHOW_IMAGE
+            cv::imshow("Image1 vs Image2", display_frame);
+            cv::waitKey(0);
+#endif
+            cv::imwrite("output_image.jpg", display_frame);
         }
     } catch (const std::exception& e) {
-        std::cerr << "An error occurred during video processing:\n";
+        std::cerr << "An error occurred during processing:\n";
         printExceptionChain(e);
     }
 
@@ -317,10 +425,10 @@ int main(int argc, char** argv) {
     auto total_end_time = std::chrono::high_resolution_clock::now();
     auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         total_end_time - total_start_time);
-    
+
     // Print summary statistics with build info
     std::cout << "\nProcessing Summary:" << std::endl;
-    std::cout << "PyTorch build: " << 
+    std::cout << "PyTorch build: " <<
         #ifdef TORCH_CUDA_AVAILABLE
         "with CUDA support"
         #else
@@ -330,12 +438,12 @@ int main(int argc, char** argv) {
     std::cout << "Device used: " << (has_cuda ? "GPU" : "CPU") << std::endl;
     std::cout << "Total frames processed: " << frame_count << std::endl;
     std::cout << "Total processing time: " << total_duration.count() / 1000.0 << " seconds" << std::endl;
-    std::cout << "Average FPS: " << frame_count / (total_duration.count() / 1000.0) << std::endl;
+    if (mode == "video") {
+        std::cout << "Average FPS: " << frame_count / (total_duration.count() / 1000.0) << std::endl;
+    }
     std::cout << "Total inference time: " << total_inference_time << " seconds" << std::endl;
     std::cout << "Average inference time per frame: " << total_inference_time / frame_count << " seconds" << std::endl;
 
-    cap.release();
-    video_out.release();
     cv::destroyAllWindows();
     return 0;
 }
