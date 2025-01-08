@@ -25,14 +25,42 @@ def prepare_sample_input(batch_size, height, width, device):
     return input1, input2
 
 
-def export_torchscript_trace(model, example_inputs, model_type, output_dir):
+def export_torchscript_trace(model, example_inputs, model_type, output_dir, dynamic=True):
     """Export model using TorchScript tracing."""
     print(f"Exporting {model_type} model to TorchScript (Tracing)...")
     try:
-        traced_model = torch.jit.trace(model, example_inputs)
-        filename = f"{output_dir}/raft_{model_type}_traced_torchscript.pt"
-        traced_model.save(filename)
-        print(f"Traced TorchScript model saved as '{filename}'")
+        # Create wrapper for dynamic support
+        class DynamicRAFT(torch.nn.Module):
+            def __init__(self, model):
+                super().__init__()
+                self.model = model
+            
+            def forward(self, x1, x2):
+                return self.model(x1, x2)
+
+        if dynamic:
+            wrapped_model = DynamicRAFT(model)
+            traced_model = torch.jit.trace(
+                wrapped_model,
+                example_inputs,
+                check_trace=True,
+                check_tolerance=1e-4
+            )
+            filename = f"{output_dir}/raft_{model_type}_traced_dynamic.pt"
+            traced_model.save(filename, _extra_files={
+                "dynamic_axes.json": str({
+                    "input1": {0: "batch"},
+                    "input2": {0: "batch"},
+                    "output": {0: "batch"}
+                })
+            })
+            print(f"Dynamic traced TorchScript model saved as '{filename}'")
+        else:
+            # Original static tracing
+            traced_model = torch.jit.trace(model, example_inputs)
+            filename = f"{output_dir}/raft_{model_type}_traced_torchscript.pt"
+            traced_model.save(filename)
+            print(f"Static traced TorchScript model saved as '{filename}'")
     except Exception as e:
         print(f"Tracing failed: {e}")
 
@@ -103,6 +131,9 @@ def parse_args():
     parser.add_argument('--device', type=str, choices=['cuda', 'cpu'],
                       default=None,
                       help='Device to use (default: use cuda if available)')
+
+    parser.add_argument('--dynamic', action='store_true',
+                      help='Enable dynamic batching for traced export')
     
     return parser.parse_args()
 
@@ -133,7 +164,7 @@ def main():
         
         # Export in specified format(s)
         if args.format in ['all', 'traced']:
-            export_torchscript_trace(model, example_inputs, model_type, args.output_dir)
+            export_torchscript_trace(model, example_inputs, model_type, args.output_dir, dynamic=args.dynamic)
         
         if args.format in ['all', 'scripted']:
             export_torchscript_script(model, model_type, args.output_dir)
