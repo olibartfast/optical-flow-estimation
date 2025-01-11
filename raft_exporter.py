@@ -4,11 +4,28 @@ import torch.nn as nn
 import argparse
 
 
+class TritonRAFTWrapper(nn.Module):
+    """Wrapper for RAFT model to make it Triton-compatible by combining outputs."""
+    def __init__(self, base_model):
+        super().__init__()
+        self.base_model = base_model
+    
+    def forward(self, x1, x2):
+        # RAFT returns a list of flow predictions at different scales
+        # We'll take the final prediction which is most refined
+        flow_predictions = self.base_model(x1, x2)
+        # Return only the final flow prediction
+        return flow_predictions[-1]
+
+
 def load_model(model_type='small'):
     """Load and prepare RAFT model for export."""
     # Select model based on type
     model_fn = raft_small if model_type == 'small' else raft_large
     model = model_fn(pretrained=True)
+    
+    # Wrap the model to make it Triton-compatible
+    model = TritonRAFTWrapper(model)
     
     # Move model to appropriate device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -92,11 +109,11 @@ def export_onnx(model, example_inputs, model_type, output_dir):
             opset_version=16,
             do_constant_folding=True,
             input_names=['input1', 'input2'],
-            output_names=['output'],
+            output_names=['flow_prediction'],
             dynamic_axes={
                 'input1': {0: 'batch_size', 2: 'height', 3: 'width'},
                 'input2': {0: 'batch_size', 2: 'height', 3: 'width'},
-                'output': {0: 'batch_size', 2: 'height', 3: 'width'}
+                'flow_prediction': {0: 'batch_size', 2: 'height', 3: 'width'}
             }
         )
         print(f"ONNX model saved as '{filename}'")
